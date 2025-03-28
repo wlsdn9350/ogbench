@@ -98,6 +98,20 @@ class ImpalaEncoder(nn.Module):
         out = MLP(self.mlp_hidden_dims, activate_final=True, layer_norm=self.layer_norm)(out)
 
         return out
+    
+
+class MLPEncoder(nn.Module):
+    """MLP encoder."""
+
+    hidden_dims: Sequence[int]
+    layer_norm: bool = False
+
+    def setup(self):
+        self.mlp = MLP(self.hidden_dims, activate_final=True, layer_norm=self.layer_norm)
+
+    @nn.compact
+    def __call__(self, x):
+        return self.mlp(x)  
 
 
 class GCEncoder(nn.Module):
@@ -113,7 +127,7 @@ class GCEncoder(nn.Module):
     concat_encoder: nn.Module = None
 
     @nn.compact
-    def __call__(self, observations, goals=None, goal_encoded=False):
+    def __call__(self, observations, goals=None, goal_encoded=False, concat_encoded=True):
         """Returns the representations of observations and goals.
 
         If `goal_encoded` is True, `goals` is assumed to be already encoded representations. In this case, either
@@ -132,7 +146,10 @@ class GCEncoder(nn.Module):
                     reps.append(self.goal_encoder(goals))
                 if self.concat_encoder is not None:
                     reps.append(self.concat_encoder(jnp.concatenate([observations, goals], axis=-1)))
-        reps = jnp.concatenate(reps, axis=-1)
+        
+        if concat_encoded:
+            reps = jnp.concatenate(reps, axis=-1)
+        
         return reps
 
 
@@ -141,4 +158,7 @@ encoder_modules = {
     'impala_debug': functools.partial(ImpalaEncoder, num_blocks=1, stack_sizes=(4, 4)),
     'impala_small': functools.partial(ImpalaEncoder, num_blocks=1),
     'impala_large': functools.partial(ImpalaEncoder, stack_sizes=(64, 128, 128), mlp_hidden_dims=(1024,)),
+    'mlp': MLPEncoder,
+    'mlp_small': functools.partial(MLPEncoder, hidden_dims=(256,)),
+    'mlp_large': functools.partial(MLPEncoder, hidden_dims=(1024,)),
 }
