@@ -242,7 +242,17 @@ class GCDataset:
         successes = (idxs == value_goal_idxs).astype(float)
         batch['masks'] = 1.0 - successes
         batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
+        
+        # if not self.config['gc_negative']:
+        #     step_to_go_array = (value_goal_idxs - idxs)
+        #     mc_returns_array = []
 
+        #     for step_to_go in step_to_go_array:
+        #         mc_returns = self.config['discount'] ** step_to_go
+        #         mc_returns_array.append(mc_returns)
+
+        #     batch['mc_returns'] = np.array(mc_returns_array)[:, None]
+        
         if self.config['p_aug'] is not None and not evaluation:
             if np.random.rand() < self.config['p_aug']:
                 self.augment(batch, ['observations', 'next_observations', 'value_goals', 'actor_goals'])
