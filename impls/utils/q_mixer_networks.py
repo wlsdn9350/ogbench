@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
+
 class MixerBlock(nn.Module):
     """
     Mixer block for MLP-Mixer (token mixing + channel mixing).
@@ -36,7 +37,7 @@ class MixerBlock(nn.Module):
         # Transpose for token mixing across the token dimension.
         y = jnp.transpose(y, (0, 2, 1))
         y = self.token_dense1(y)
-        y = nn.relu(y)
+        y = nn.gelu(y)
         y = self.token_dense2(y)
         y = jnp.transpose(y, (0, 2, 1))
 
@@ -47,7 +48,7 @@ class MixerBlock(nn.Module):
         # Channel mixing within each token.
         z = self.channel_norm(x)
         z = self.channel_dense1(z)
-        z = nn.relu(z)
+        z = nn.gelu(z)
         z = self.channel_dense2(z)
         if mask is not None:
             z = z * mask_exp
@@ -88,15 +89,8 @@ class QFunctionMixerCore(nn.Module):
         # Parameter for previous token embeddings:
         self.prev_tokens = self.param("prev_tokens",
                                       nn.initializers.normal(stddev=0.1),
-                                      (1, 1, 1, self.num_bins))
-        # Create a list of Mixer blocks.
-        # self.mixer_blocks = [
-        #     MixerBlock(num_tokens=self.num_tokens * (self.num_action_dims + 1),
-        #                embed_dim=self.state_dim,
-        #                hidden_dim_tokens=self.mixer_token_hidden,
-        #                hidden_dim_channels=self.mixer_channel_hidden)
-        #     for _ in range(self.num_mixer_blocks)
-        # ]
+                                      (1, 1, 1, self.joint_embed_dim))
+
         self.mixer_block = MixerBlock(num_tokens=self.num_tokens * (self.num_action_dims + 2),
                        embed_dim=self.state_dim,
                        hidden_dim_tokens=self.mixer_token_hidden,

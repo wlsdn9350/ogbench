@@ -10,6 +10,8 @@ python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agen
 python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/crl.py --agent.alpha=0.03
 # pointmaze-medium-navigate-v0 (HIQL)
 python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/hiql.py --agent.high_alpha=3.0 --agent.low_alpha=3.0
+# pointmaze-medium-navigate-v0 (Q-MIXER)
+python main.py --env_name=pointmaze-medium-navigate-v0 --eval_episodes=50 --agent=agents/q_mixer.py --agent.encoder=mlp_small
 
 # pointmaze-large-navigate-v0 (GCBC)
 python main.py --env_name=pointmaze-large-navigate-v0 --eval_episodes=50 --agent=agents/gcbc.py

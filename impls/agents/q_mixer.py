@@ -26,23 +26,25 @@ class QMixerAgent(flax.struct.PyTreeNode):
         """Compute the total loss."""
         info = {}
         observations = batch['observations']  # shape: (B, V, D)
+        next_observations = batch['next_observations']
         actions = batch['actions']    # ground truth or teacher-forcing tokens
-        goals = batch['actor_goals']
+        goals = batch['value_goals']
         
         if len(observations.shape) == 2:
             observations = jnp.expand_dims(observations, axis=1)
+            next_observations = jnp.expand_dims(next_observations, axis=1)
             actions = jnp.expand_dims(actions, axis=1)
             goals = jnp.expand_dims(goals, axis=1)
-        
+
         actions = continuous_to_discrete(actions, self.config['action_max'], self.config['action_min'], self.config['num_bins'])
-        
+
         rewards = batch['rewards']
         rewards = jnp.expand_dims(rewards, axis=-1)
 
         current_dist, _ = self.network.select('q_predictors')(observations, goals, action_seq=actions, params=grad_params)
 
-        current_q, _ = self.network.select('q_predictors')(observations, goals, action_seq=None)
-        next_q, _ = self.network.select('target_q_predictors')(observations, goals, action_seq=None)
+        current_q, _ = self.network.select('target_q_predictors')(observations, goals, action_seq=None)
+        next_q, _ = self.network.select('target_q_predictors')(next_observations, goals, action_seq=None)
 
         current_q_max = current_q.max(axis=-1)
         next_q_max = next_q.max(axis=-1)
@@ -50,11 +52,14 @@ class QMixerAgent(flax.struct.PyTreeNode):
         td_targets = jnp.zeros_like(next_q_max)
 
         # All dimensions except last use next action dim
-        # print(td_targets.shape, rewards.shape, next_q_max[..., 0].shape)
+        # print(td_targets[..., -1].shape, rewards.shape, next_q_max[..., 0].shape)
         td_targets = td_targets.at[..., :-1].set(current_q_max[..., 1:])
         td_targets = td_targets.at[..., -1].set(rewards + self.config['discount'] * next_q_max[..., 0])
 
-        #TODO: Implement mc_returns
+        # #TODO: Implement mc_returns
+        # if not self.config['gc_negative']:
+        #     mc_returns = batch['mc_returns']
+        #     td_targets = jnp.maximum(td_targets, mc_returns)
 
         action_mask = jax.nn.one_hot(actions, num_classes=self.config['num_bins']).astype(jnp.float32)
 
@@ -62,10 +67,9 @@ class QMixerAgent(flax.struct.PyTreeNode):
         td_error = 0.5 * jnp.mean((current_q - td_targets) ** 2)
 
         # Conservative regularization
-        B, V, A, N = current_dist.shape
         non_action_mask = 1 - action_mask
         non_action_q = (current_dist ** 2 * non_action_mask).sum(axis=-1)
-        conservative_loss = (self.config['alpha'] / (2 * (N - 1))) * non_action_q.mean()
+        conservative_loss = (self.config['alpha'] / (2 * (current_dist.shape[-1] - 1))) * non_action_q.mean()
 
         info["td_error"] = td_error
         info["conservative_loss"] = conservative_loss
@@ -92,7 +96,6 @@ class QMixerAgent(flax.struct.PyTreeNode):
         def loss_fn(grad_params):
             return self.total_loss(batch, grad_params, rng=rng)
         
-        # Here we assume that network.apply_loss_fn is available to update parameters.
         new_network, info = self.network.apply_loss_fn(loss_fn=loss_fn)
         self.target_update(new_network, 'q_predictors')
 
@@ -116,8 +119,8 @@ class QMixerAgent(flax.struct.PyTreeNode):
         _, predicted_actions = self.network.select('target_q_predictors')(observations, goals, action_seq=None)
         actions = discrete_to_continuous(predicted_actions, self.config['action_max'],
                                          self.config['action_min'], self.config['num_bins'])  # Placeholder: directly use predicted discrete actions.
-        
-        return actions
+
+        return actions[0, -1, :]
 
     @classmethod
     def create(
@@ -164,11 +167,11 @@ class QMixerAgent(flax.struct.PyTreeNode):
                 num_tokens=ex_observations.shape[1],
                 state_dim=config['feature_dim'],
                 num_action_dims=action_dim,
-                num_bins=config.get('num_bins', 256),
-                joint_embed_dim=config.get('joint_embed_dim', 256),
-                num_mixer_blocks=config.get('num_mixer_blocks', 1),
-                mixer_token_hidden=config.get('mixer_token_hidden', 256),
-                mixer_channel_hidden=config.get('mixer_channel_hidden', 256),
+                num_bins=config['num_bins'],
+                joint_embed_dim=config['feature_dim'],
+                num_mixer_blocks=config['num_mixer_blocks'],
+                mixer_token_hidden=config['mixer_hidden'],
+                mixer_channel_hidden=config['mixer_hidden'],
                 gc_encoder=encoders.get('actor')
             )
 
@@ -185,6 +188,11 @@ class QMixerAgent(flax.struct.PyTreeNode):
         network_tx = optax.adam(learning_rate=config['lr'])
         network_params = network_def.init(init_rng, **network_args)['params']
         network = TrainState.create(network_def, network_params, tx=network_tx)
+
+        params = network_params
+        params['modules_target_q_predictors'] = params['modules_q_predictors']
+
+        print("Creating Done")
 
         return cls(rng, network=network, config=flax.core.FrozenDict(**config))
 
@@ -217,7 +225,7 @@ def get_config():
         dict(
             agent_name='qmixer',  # Agent name.
             lr=3e-4,              # Learning rate.
-            batch_size=64,      # Batch size.
+            batch_size=1024,      # Batch size.
             discount=0.99,
             alpha=1.0,
             tau=0.005,  # Target network update rate.
@@ -225,21 +233,24 @@ def get_config():
             discrete=False,  # Whether the action space is discrete.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             dataset_class='GCDataset',
-            value_p_curgoal=0.0,  # Probability of using the current state as the value goal.
-            value_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the value goal.
+            value_p_curgoal=0.2,  # Probability of using the current state as the value goal.
+            value_p_trajgoal=0.8,  # Probability of using a future state in the same trajectory as the value goal.
             value_p_randomgoal=0.0,  # Probability of using a random state as the value goal.
             value_geom_sample=True,  # Whether to use geometric sampling for future value goals.
             actor_p_curgoal=0.0,  # Probability of using the current state as the actor goal.
             actor_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the actor goal.
             actor_p_randomgoal=0.0,  # Probability of using a random state as the actor goal.
             actor_geom_sample=False,  # Whether to use geometric sampling for future actor goals.
-            gc_negative=False,  # Unused (defined for compatibility with GCDataset).
+            gc_negative=False,  # Whether to use '0 if s == g else -1' (True) or '1 if s == g else 0' (False) as reward.
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),
-            feature_dim=256,
+            feature_dim=10,
             action_max=1.0,
             action_min=-1.0,
             num_bins=256,
+            # joint_embed_dim=64,
+            mixer_hidden=256,
+            num_mixer_blocks=1,
         )
     )
     return config
