@@ -159,6 +159,6 @@ encoder_modules = {
     'impala_small': functools.partial(ImpalaEncoder, num_blocks=1),
     'impala_large': functools.partial(ImpalaEncoder, stack_sizes=(64, 128, 128), mlp_hidden_dims=(1024,)),
     'mlp': MLPEncoder,
-    'mlp_small': functools.partial(MLPEncoder, hidden_dims=(256,)),
+    'mlp_small': functools.partial(MLPEncoder, hidden_dims=(10,)),
     'mlp_large': functools.partial(MLPEncoder, hidden_dims=(1024,)),
 }
